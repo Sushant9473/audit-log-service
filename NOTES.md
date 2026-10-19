@@ -105,6 +105,9 @@
     - Why: no cap = one caller could store huge rows (disk, memory, slow pages for that tenant)
     - Dataset check: metadata max 330 B → re-run of load with caps: 0 invalid lines (67.3 s, 29,746 lines/s)
     - Rejected: CHECK constraints in the DB as well (time; app is the only writer)
+37. Ingest throughput benchmark: scripts/ingest_bench.py; reserved tenants t_9001–t_9005, Sept 2026 dates (summary window unchanged), deleted before + after; bodies built before the clock; several client processes
+    - Rejected: one client process (httpx in 1 process saturates at ~900 req/s → measured the client, not the API; found by per-process CPU sampling: client 98%, uvicorn 34%)
+    - Rejected: benchmarking against an empty DB (less realistic; real run writes into the 2M-row table)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -166,6 +169,20 @@
   - Benchmarks: B1 2.3 / B2 2.2 / B3 2.4 / B4 2.0 ms median
   - docker compose restart → healthy, rows kept
   - git history: no data/, *.ndjson*, .env ever committed; 30 tracked files
+- Ingest throughput, 1 API process (as shipped), into the 2M-row DB, concurrent callers:
+
+  | Events per request | Callers | Events | Seconds | Events/s | p50 ms | p95 ms | Max ms |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 32 | 20,000 | 11.9 | 1,683 | 13.7 | 40.0 | 405.4 |
+  | 100 | 8 | 100,000 | 4.4 | 22,557 | 28.1 | 60.4 | 186.4 |
+  | 1,000 | 4 | 200,000 | 9.1 | 21,971 | 127.6 | 386.3 | 876.5 |
+
+- Ingest ranges across repeated runs: 1 event/request 1,683–2,267 events/s; batches of 100 or 1,000: 19k–37k events/s (Docker Desktop disk I/O variance; checkpoints during runs)
+- 1 event/request is API-CPU-bound: uvicorn 96% CPU while client processes ~50% each
+- 4 API processes (temporary, port 8001): 1 event/request 1,923/s, batches 19k–28k/s → no gain on this laptop (clients, 4 API processes and Postgres share 8 cores); can't show scaling on one machine
+- fsync on the DB volume (pg_test_fsync): ~12,900 fdatasync/s (78 µs) → commit flushes not the limit
+- vs prod: peak 3,000/s → batched ingest has 7–12× headroom on 1 process; 1 event/request is below peak on 1 process
+- First (flawed) run with 1 client process: 866 / 26,916 / 37,225 events/s; client at 98% CPU → discarded
 - Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes); 39 passed in ~2.9 s after size caps
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)

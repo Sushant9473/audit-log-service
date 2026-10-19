@@ -139,6 +139,14 @@ docker compose exec api python scripts/bench.py
 
 This needs the dataset loaded. It prints the B1–B4 table below, plus how B2's page was reached.
 
+To measure Ingest API throughput:
+
+```bash
+docker compose exec api python scripts/ingest_bench.py
+```
+
+This writes about 320,000 events for tenants `t_9001`–`t_9005`, which are reserved for the benchmark, and deletes them afterwards. The loaded data isn't changed.
+
 ## Results
 
 ### Benchmarks
@@ -157,6 +165,23 @@ Times are measured by an HTTP client inside the api container, so they include H
 A second run gave the same medians within 0.1 ms.
 
 **How B2 is reached.** Pagination is keyset-based: each cursor points just after the last row of the previous page, so there's no "jump to offset". The benchmark walks 2,000 pages once with `next_cursor` (5.4 s, 2.7 ms per page) to get the cursor for page 2,001. It then times 10 requests for that page. The page's first and last events match rows 100,001 and 100,050 of a SQL `ORDER BY occurred_at DESC, event_id DESC`. The cursor seeks straight into the index, so page 2,001 costs the same as page 1.
+
+### Ingest throughput
+
+These numbers are for one API process, as shipped, writing into the loaded 2M-row database. Several client processes send the requests, because a single Python client process can't send much more than about 900 requests/s.
+
+| Events per request | Concurrent callers | Events | Events/s | p50 (ms) | p95 (ms) |
+|---|---|---|---|---|---|
+| 1 | 32 | 20,000 | 1,683 | 13.7 | 40.0 |
+| 100 | 8 | 100,000 | 22,557 | 28.1 | 60.4 |
+| 1,000 | 4 | 200,000 | 21,971 | 127.6 | 386.3 |
+
+Across repeated runs:
+
+- **One event per request:** 1,700–2,300 events/s. That's below the 3,000/s production peak, and the limit is the API process's CPU: each event pays for HTTP, JSON parsing and validation on its own.
+- **Batches:** 19,000–37,000 events/s. That's 7–12× the peak. The variation comes from disk I/O on Docker Desktop.
+
+Callers are expected to send batches. See [DESIGN.md](DESIGN.md) for how this scales.
 
 ### Load
 
