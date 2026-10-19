@@ -1,0 +1,14 @@
+# Dataset: download it yourself, never commit it
+data/
+*.ndjson
+*.ndjson.gz
+
+# Local config and Python leftovers
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
