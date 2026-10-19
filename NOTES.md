@@ -160,3 +160,62 @@
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
 - Step 4 checks: 3 pages via next_cursor = SQL ORDER BY result, 0 overlap; cursor from other tenant / other filters / tampered / garbage → 400; summary 2026-09-15 for t_0001 = GROUP BY on events (7,728 events, 22 actions); 30 days returned
+
+## DESIGN.md fact sheet (fragments only; write the doc yourself)
+
+### Measured per row (1,980,388 rows, after load + VACUUM)
+- events heap: 394 B
+- events_pkey (uuid): 40 B
+- events_tenant_time_idx: 74 B
+- events_tenant_action_time_idx: 107 B
+- 3 indexes: 221 B; table + indexes: 615 B
+- daily_action_counts: 180 B/row incl. its 2 indexes; 335,309 rows for 61 days
+- WAL: ~927 B per inserted event (100k-line load into audit_test; incl. full-page writes + VACUUM ANALYZE)
+
+### Projected 1 year at 20M/day
+- 7.3B rows
+- table 2.88 TB + indexes 1.61 TB (pkey 294 GB, tenant_time 537 GB, tenant_action_time 780 GB) = 4.49 TB
+- growth 12.3 GB/day; WAL 18.5 GB/day
+- monthly partitions: 12/yr, 608M rows each, 240 GB table + 134 GB indexes
+- daily partitions: 365/yr, 20M rows each, 7.9 GB table + 4.4 GB indexes
+- daily_action_counts: ~2.0M rows/yr (~362 MB) at dataset density; ceiling 800 × 22 × 365 = 6.42M rows/yr (~1.16 GB)
+
+### Write rate
+- prod average 231 events/s; peak 3,000/s; peak/average 13×
+- measured load: 22,428 lines/s on 1 connection, batches of 10,000, table growing 0 → 2M rows = 7.5× peak
+- WAL at peak ≈ 2.8 MB/s
+- prod daily volume = 616× dataset daily volume (32,465 events/day)
+
+### Tenant skew
+- t_0001 = 20.0% → 4.0M events/day, 1.46B/yr, ~898 GB/yr incl. indexes (~107 GB of tenant_time index alone)
+- top 5 = 60% → 12M/day; every tenant from t_0006 on ≤ 0.8%
+- hottest summary row: t_0001 × document.view (22.5% of events) → ~898k increments/day, ~10/s average, ~135/s at peak if each event were its own transaction
+
+### Reads
+- B1–B4 medians 2.0–2.4 ms
+- B2: 2,000 requests to reach, 5.4 s (2.7 ms/page); the page itself 2.2 ms
+- summary reads 660 rows for t_0001 (30 days × 22 actions) whatever the event volume
+- today: indexes 417 MB vs shared_buffers 512 MB vs Docker memory 3.82 GiB; 1 year: indexes 1.61 TB
+
+### Topics for "what breaks first" (no conclusions)
+- single-node write rate and WAL volume
+- index size vs RAM; random uuid primary-key inserts; hot tenants' index pages
+- hot tenants and partition size
+- contention on hot daily_action_counts rows
+- removing year-old data without partitions (20M rows/day)
+- deep paging (B2-style walk)
+- connection count (asyncpg pool max 10 per API process; Postgres default max_connections 100)
+
+### DESIGN.md sections → items in this file to cover
+1. Database choice → decision 1; decision 14
+2. Schema → decisions 2, 3, 4, 18; dataset facts (duplicates identical, 0 rule violations)
+3. Pagination → decisions 8, 9, 24, 25 (incl. edge case), 32
+4. Write path → decisions 5, 6, 11, 16, 17, 19, 20
+5. Constraints
+   - 1 duplicates → decisions 2, 5, 16, 17; retries up to 19.2 min late; tests
+   - 2 late/out of order → decisions 4, 5, 10; first copies ≤ 9.99 min late; tests
+   - 3 stable paging → decisions 9, 25; paging test; mutation check
+   - 4 tenant isolation → decisions 7, 22, 24, 28; tests; mutation check
+6. At production scale → this fact sheet; decision 1 (partitioning plan); decision 7 (RLS as hardening)
+7. Assumptions → Assumptions section; decisions 6 (changed to all-or-nothing), 7 (gateway), 10, 23
+8. AI usage → yours to write; facts: AI wrote code, tests, scripts, README and NOTES.md and proposed the decisions you approved; DESIGN.md written by you
