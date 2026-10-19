@@ -49,14 +49,15 @@
    - Rejected: partial success (more complex response); async queue before DB (time; harder "stored" guarantee)
    - Changed from step 0 suggestion (per-event reject) → all-or-nothing, for time
 7. Read-API tenant: required X-Tenant-ID header, assumed set by an auth gateway that already authenticated the user; every read query has WHERE tenant_id = $1
-   - Rejected: per-tenant API keys (time); row-level security (time; production hardening)
+   - Rejected: per-tenant API keys (time)
+   - Row-level security first rejected for time, later added as a 2nd layer → decision 38
 8. List: GET /v1/events?action=&from=&to=&limit=&cursor=; order (occurred_at DESC, event_id DESC); from inclusive, to exclusive, ISO 8601; limit default 50, max 200
    - Rejected: ordering by arrival (brief: newest first = when it happened)
 9. Pagination: keyset cursor = base64url JSON {last occurred_at, last event_id, snapshot ingest_seq, tenant, filters} + HMAC-SHA256 (secret from env, compose default); snapshot = ingest_seq sequence last value at page 1; every page adds ingest_seq <= snapshot; mismatched signature/tenant/filters → 400; new/late events show after refresh
    - Rejected: offset pagination (dupes/misses under inserts; deep pages slow)
 10. Summary: GET /v1/summary; anchor = newest day in daily_action_counts (all tenants); window = 30 UTC days ending on anchor day, inclusive; every day present, zeros included; success + failure counted
     - Rejected: rolling 720 h window (daily buckets can't split a day); per-tenant anchor (brief says "newest event in your data")
-11. Load: scripts/load.py inside api container; dataset piped on stdin: docker compose exec -T api python scripts/load.py < data/audit_events.ndjson.gz; stream gzip; batches of 10,000 → COPY into temp table → shared write statement; bad lines skipped + counted; re-runnable
+11. Load: scripts/load.py inside api container; dataset piped on stdin: docker compose exec -T api python scripts/load.py < data/audit_events.ndjson.gz; stream gzip; batches of 10,000 → shared insert_events() statement (unnest arrays, decision 16; the COPY-into-temp-table plan was dropped); bad lines skipped + counted; re-runnable
     - Rejected: posting batches to the Ingest API (HTTP + JSON overhead; brief allows direct bulk load)
     - Rejected: bind-mounting ./data (Docker Desktop on macOS was blocked from ~/Desktop: "mkdir /host_mnt/Users/sushant/Desktop: operation not permitted"; same risk on grader's machine)
 12. Schema setup: migrations/ copied into a db image (db.Dockerfile, FROM postgres:16) at /docker-entrypoint-initdb.d; runs once on a fresh volume; schema change → docker compose down -v
@@ -88,7 +89,7 @@
 26. List response {"data": [...], "next_cursor": str | null}; events = the 12 brief fields, occurred_at as 2026-09-14T08:31:07.412Z; next_cursor null on last page (limit + 1 rows fetched to know)
 27. Summary response {"from", "to", "days": [{"date", "counts": {action: n}}]}; all 30 days present; actions with 0 omitted inside a day; empty DB → from/to null
 28. List SQL built from optional conditions; only "$n" placeholders go into SQL text, values always bound parameters (no injection)
-29. Tests: separate database audit_test, dropped + recreated from migrations/001_schema.sql at start of every run; tables truncated before each test; app run in-process via httpx ASGITransport; command docker compose exec api pytest -q
+29. Tests: separate database audit_test, dropped + recreated from all migrations/*.sql in order at start of every run; tables truncated before each test; app run in-process via httpx ASGITransport; command docker compose exec api pytest -q
     - Rejected: testing against the loaded data (would change counts and benchmark data); separate test image (time) → pytest, pytest-asyncio, httpx in requirements.txt
 30. Test coverage: duplicates (retried batch, repeat inside batch, counts not inflated); concurrent retries (same batch from 10 callers at once → each event stored by exactly one request; 12 overlapping batches in random orders → no deadlock; 12 disjoint batches on the same 60 count rows → no lost increments); late + out of order across midnight (list order, day buckets); paging with 20 newer + 20 late events arriving mid-paging (no repeats, exactly the page-1 set, refresh shows all); ties on occurred_at; tenant isolation (list, filters, summary, stolen/edited cursor, bad header); 9 invalid-event cases + batch size 0 / 1001; offset timestamps stored as UTC; summary zero-fill, window edges, failures counted, anchor across tenants
 31. Benchmarks: scripts/bench.py, httpx client inside api container → http://localhost:8000, one keep-alive connection; 1 warm-up + 10 timed runs each; times include HTTP + JSON, not just SQL
