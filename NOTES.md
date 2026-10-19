@@ -196,6 +196,10 @@
 - Plans as tenant_reader: same indexes (events_tenant_time_idx, events_tenant_action_time_idx, daily_action_counts_pkey); policy becomes a One-Time Filter, not a per-row check
 - Benchmarks with RLS (warm, run 3): B1 3.0 / B2 3.1 / B3 2.9 / B4 2.4 ms median; before RLS 2.3 / 2.2 / 2.4 / 2.1 → ~0.5 ms = BEGIN + SET LOCAL ROLE + set_config + COMMIT round trips
 - Benchmarks right after db restart (cold, run 1): 2.6 / 2.6 / 3.6 / 2.8 ms; B2 walk 9.5 s (4.8 ms/page)
+- Fresh-clone run #2, final version (commit 56146bd, 2026-10-19): build --no-cache OK; up --wait healthy in 6.7 s; initdb ran 001 + 002 (policies, function)
+  - Load: 127.9 s in script, 2 min 10 s wall (15,643 lines/s); 1,980,386 / 20,646 / 0; disk 745 MB table + 417 MB indexes + 53 MB counts = 1,222 MB DB
+  - Slower than first load (89.2 s): extra validation (metadata size via json.dumps, future check) + run-to-run variance; validation-only re-run went 55.9 s → 67.3 s
+  - Ingest x2, 4 list variants, cursor page, summary OK; tests 44 passed; B1–B4 2.7 / 2.6 / 2.7 / 2.4 ms; ingest 2,372 / 28,406 / 27,016 events/s; restart OK
 - Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes); 39 passed in ~2.9 s after size caps; 44 passed in ~3.5 s after row-level security
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
@@ -225,6 +229,7 @@
 - measured load: 22,428 lines/s on 1 connection, batches of 10,000, table growing 0 → 2M rows = 7.5× peak
 - WAL at peak ≈ 2.8 MB/s
 - prod daily volume = 616× dataset daily volume (32,465 events/day)
+- measured Ingest API, 1 process: 1 event/request ~1,700–2,400 events/s (API CPU-bound, below 3,000/s peak); batches of 100–1,000: ~19k–37k events/s (7–12× peak)
 
 ### Tenant skew
 - t_0001 = 20.0% → 4.0M events/day, 1.46B/yr, ~898 GB/yr incl. indexes (~107 GB of tenant_time index alone)
@@ -248,14 +253,14 @@
 
 ### DESIGN.md sections → items in this file to cover
 1. Database choice → decision 1; decision 14
-2. Schema → decisions 2, 3, 4, 18; dataset facts (duplicates identical, 0 rule violations)
+2. Schema → decisions 2, 3, 4, 18, 35, 36; dataset facts (duplicates identical, 0 rule violations)
 3. Pagination → decisions 8, 9, 24, 25 (incl. edge case), 32
-4. Write path → decisions 5, 6, 11, 16, 17, 19, 20
+4. Write path → decisions 5, 6, 11, 16, 17, 19, 20, 37 (ingest throughput)
 5. Constraints
-   - 1 duplicates → decisions 2, 5, 16, 17; retries up to 19.2 min late; tests
+   - 1 duplicates → decisions 2, 5, 16, 17; retries up to 19.2 min late; concurrent-retry tests + deadlock mutation (3/3)
    - 2 late/out of order → decisions 4, 5, 10; first copies ≤ 9.99 min late; tests
    - 3 stable paging → decisions 9, 25; paging test; mutation check
-   - 4 tenant isolation → decisions 7, 22, 24, 28; tests; mutation check
-6. At production scale → this fact sheet; decision 1 (partitioning plan); decision 7 (RLS as hardening)
-7. Assumptions → Assumptions section; decisions 6 (changed to all-or-nothing), 7 (gateway), 10, 23
+   - 4 tenant isolation → decisions 7, 22, 24, 28, 38 (row-level security + its limit); tests; mutation checks (filter removed → RLS still holds)
+6. At production scale → this fact sheet; decision 1 (partitioning plan); decision 37 (1 event/request below peak → batching, more API processes); decision 38 limit (non-superuser roles)
+7. Assumptions → Assumptions section; decisions 6 (changed to all-or-nothing), 7 (gateway), 10, 23, 35 (1 h clock skew)
 8. AI usage → yours to write; facts: AI wrote code, tests, scripts, README and NOTES.md and proposed the decisions you approved; DESIGN.md written by you

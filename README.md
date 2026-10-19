@@ -54,7 +54,7 @@ Expected: `{"status":"ok"}`.
 docker compose exec -T api python scripts/load.py < data/audit_events.ndjson.gz
 ```
 
-This takes about **1.5 minutes** on the machine below: 1 min 32 s and 1 min 39 s in two runs.
+This takes **1.5–2 minutes** on the machine below. The final version took 2 min 10 s from a fresh clone. Earlier runs took 1 min 32 s and 1 min 39 s, before the size and future-date checks were added.
 
 - The file is piped in through stdin, so Docker never needs access to the project folder.
 - Rows are written in batches of 10,000. Each batch is one SQL statement that skips any `event_id` already stored, so duplicates in the file are stored once.
@@ -192,7 +192,7 @@ Callers are expected to send batches. See [DESIGN.md](DESIGN.md) for how this sc
 
 | | |
 |---|---|
-| Load time | 89.2 s in the script; 1 min 32 s wall clock, including `docker compose exec` (22,428 lines/s) |
+| Load time | 127.9 s in the script; 2 min 10 s wall clock, including `docker compose exec` (15,643 lines/s), final version, fresh clone. Before the size and future-date checks: 89.2 s / 1 min 32 s (22,428 lines/s). |
 | Lines read | 2,001,032 |
 | Inserted | 1,980,386 |
 | Duplicates skipped | 20,646 |
