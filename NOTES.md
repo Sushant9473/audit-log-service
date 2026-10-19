@@ -75,6 +75,17 @@
 20. Load: each batch commits on its own (crash mid-load → just re-run); VACUUM (ANALYZE) after load so stats + visibility map are fresh (index-only scans)
     - Rejected: waiting for autovacuum (benchmarks right after load would get stale plans)
 21. Dockerfile sets PYTHONPATH=/app so scripts/*.py can import app
+22. Read-API errors: missing/bad X-Tenant-ID → 400; bad cursor → 400; from >= to → 400; unknown action, limit outside 1–200 → 422 (FastAPI validation)
+23. Query times (from/to) without timezone → taken as UTC
+24. Cursor = base64url(JSON).base64url(HMAC-SHA256); holds tenant, filters (action, from, to as UTC ISO), snapshot, last occurred_at (full µs precision), last event_id; limit not in cursor (may change between pages)
+    - Checked against request: tenant + filters must match → else 400; signature checked first with hmac.compare_digest
+25. Snapshot = SELECT last_value FROM events_ingest_seq_seq (O(1))
+    - Rejected: max(ingest_seq) (no index on ingest_seq → full scan)
+    - Edge case: a transaction holding a seq ≤ snapshot that commits after page 1 may appear on a later page or not at all in that listing; never twice; it wasn't visible when the listing began
+    - ON CONFLICT DO NOTHING still uses up sequence numbers → gaps (last_value 3,960,938 after 2 loads); harmless
+26. List response {"data": [...], "next_cursor": str | null}; events = the 12 brief fields, occurred_at as 2026-09-14T08:31:07.412Z; next_cursor null on last page (limit + 1 rows fetched to know)
+27. Summary response {"from", "to", "days": [{"date", "counts": {action: n}}]}; all 30 days present; actions with 0 omitted inside a day; empty DB → from/to null
+28. List SQL built from optional conditions; only "$n" placeholders go into SQL text, values always bound parameters (no injection)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -102,3 +113,13 @@
 - Per row: ~394 B table + ~221 B indexes ≈ 615 B/event
 - Rollup check: sum(daily_action_counts.count) = count(events) = 1,980,386; 0 buckets differ from GROUP BY over events
 - Demo ingest: 2 events, tenant t_9999, 2026-09-15 → events now 1,980,388; retry → inserted 0, duplicates 2; bad IP at index 1 → 422 loc ["body","events",1,"ip"], nothing stored
+- EXPLAIN (ANALYZE, BUFFERS), t_0001, warm:
+  - B1 page 1: Index Scan events_tenant_time_idx; 0.29 ms; 53 buffers; no Sort
+  - Cursor at row 100,000 (B2 shape): Index Scan events_tenant_time_idx, ROW(occurred_at, event_id) < ROW(...) inside Index Cond; 0.64 ms; no Sort
+  - action=invoice.delete + Sept (B3): Index Scan events_tenant_action_time_idx, all 4 conditions in Index Cond; 1.05 ms; no Sort
+  - Summary anchor max(day): Index Only Scan Backward daily_action_counts_day_idx; 0.06 ms
+  - Summary window: Bitmap scan on daily_action_counts_pkey + Sort of 660 rows; 2.4 ms
+  - ingest_seq <= snapshot = Filter on fetched rows (not in index); no Seq Scan anywhere
+  - Generic prepared-statement plans (asyncpg) use the same indexes
+- Ad-hoc HTTP timings from host (not the benchmark): page 1 43 ms (first call), pages 2–3 6–11 ms, filtered 8.8 ms, summary 5.8 ms
+- Step 4 checks: 3 pages via next_cursor = SQL ORDER BY result, 0 overlap; cursor from other tenant / other filters / tampered / garbage → 400; summary 2026-09-15 for t_0001 = GROUP BY on events (7,728 events, 22 actions); 30 days returned
