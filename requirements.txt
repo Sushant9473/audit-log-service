@@ -2,3 +2,8 @@ fastapi==0.115.6
 pydantic==2.10.4
 uvicorn[standard]==0.34.0
 asyncpg==0.30.0
+
+# Tests (kept in the same image so `docker compose exec api pytest -q` works)
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx==0.28.1

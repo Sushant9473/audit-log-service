@@ -86,6 +86,9 @@
 26. List response {"data": [...], "next_cursor": str | null}; events = the 12 brief fields, occurred_at as 2026-09-14T08:31:07.412Z; next_cursor null on last page (limit + 1 rows fetched to know)
 27. Summary response {"from", "to", "days": [{"date", "counts": {action: n}}]}; all 30 days present; actions with 0 omitted inside a day; empty DB → from/to null
 28. List SQL built from optional conditions; only "$n" placeholders go into SQL text, values always bound parameters (no injection)
+29. Tests: separate database audit_test, dropped + recreated from migrations/001_schema.sql at start of every run; tables truncated before each test; app run in-process via httpx ASGITransport; command docker compose exec api pytest -q
+    - Rejected: testing against the loaded data (would change counts and benchmark data); separate test image (time) → pytest, pytest-asyncio, httpx in requirements.txt
+30. Test coverage: duplicates (retried batch, repeat inside batch, counts not inflated); late + out of order across midnight (list order, day buckets); paging with 20 newer + 20 late events arriving mid-paging (no repeats, exactly the page-1 set, refresh shows all); ties on occurred_at; tenant isolation (list, filters, summary, stolen/edited cursor, bad header); 9 invalid-event cases + batch size 0 / 1001; offset timestamps stored as UTC; summary zero-fill, window edges, failures counted, anchor across tenants
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -122,4 +125,7 @@
   - ingest_seq <= snapshot = Filter on fetched rows (not in index); no Seq Scan anywhere
   - Generic prepared-statement plans (asyncpg) use the same indexes
 - Ad-hoc HTTP timings from host (not the benchmark): page 1 43 ms (first call), pages 2–3 6–11 ms, filtered 8.8 ms, summary 5.8 ms
+- Tests: 29 passed in ~1.5 s
+- Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
+- Main DB after test runs: 1,980,388 rows (untouched)
 - Step 4 checks: 3 pages via next_cursor = SQL ORDER BY result, 0 overlap; cursor from other tenant / other filters / tampered / garbage → 400; summary 2026-09-15 for t_0001 = GROUP BY on events (7,728 events, 22 actions); 30 days returned
