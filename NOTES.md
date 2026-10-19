@@ -101,6 +101,10 @@
     - Why: Summary window ends on newest day across all tenants → one event dated 2099 would blank every tenant's dashboard
     - Rejected: clamping the summary anchor to today (bad data still stored; anchor rule no longer "newest event in the data")
     - Rejected: tighter allowance like 5 min (callers with drifting clocks would lose events)
+36. Size caps (app/models.py): metadata ≤ 16 KB as compact JSON; actor_id, resource_id ≤ 255 chars; actor_email ≤ 320; tenant_id ≤ 32 → max request ≈ 1,000 × ~16.5 KB ≈ 16.5 MB
+    - Why: no cap = one caller could store huge rows (disk, memory, slow pages for that tenant)
+    - Dataset check: metadata max 330 B → re-run of load with caps: 0 invalid lines (67.3 s, 29,746 lines/s)
+    - Rejected: CHECK constraints in the DB as well (time; app is the only writer)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -162,7 +166,7 @@
   - Benchmarks: B1 2.3 / B2 2.2 / B3 2.4 / B4 2.0 ms median
   - docker compose restart → healthy, rows kept
   - git history: no data/, *.ndjson*, .env ever committed; 30 tracked files
-- Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes)
+- Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes); 39 passed in ~2.9 s after size caps
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
 - Step 4 checks: 3 pages via next_cursor = SQL ORDER BY result, 0 overlap; cursor from other tenant / other filters / tampered / garbage → 400; summary 2026-09-15 for t_0001 = GROUP BY on events (7,728 events, 22 actions); 30 days returned

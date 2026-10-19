@@ -21,6 +21,9 @@ INVALID_CHANGES = {
     "timestamp as a number": lambda e: e.update(occurred_at=1789000000),
     "timestamp 2 hours in the future": lambda e: e.update(occurred_at=from_now(hours=2)),
     "timestamp in year 2099": lambda e: e.update(occurred_at="2099-01-01T00:00:00.000Z"),
+    "metadata over 16 KB": lambda e: e.update(metadata={"blob": "x" * 17_000}),
+    "resource_id over 255 characters": lambda e: e.update(resource_id="r" * 256),
+    "actor_email over 320 characters": lambda e: e.update(actor_email="a" * 310 + "@example.com"),
     "missing field": lambda e: e.pop("resource_id"),
     "unknown field": lambda e: e.update(surprise=1),
 }
@@ -42,6 +45,12 @@ async def test_invalid_event_rejects_the_whole_batch(client, case):
 async def test_batch_size_limits(client, size):
     response = await client.post("/v1/events", json={"events": [make_event() for _ in range(size)]})
     assert response.status_code == 422
+
+
+async def test_metadata_just_under_the_limit_is_accepted(client):
+    event = make_event(metadata={"blob": "x" * 16_000})
+    response = await client.post("/v1/events", json={"events": [event]})
+    assert response.status_code == 200
 
 
 async def test_small_clock_skew_is_accepted(client):

@@ -129,7 +129,7 @@ curl -s -H 'X-Tenant-ID: t_0001' 'localhost:8000/v1/summary'
 docker compose exec api pytest -q
 ```
 
-There are 35 tests covering the four constraints (including retries that arrive while the original request is still running), validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
+There are 39 tests covering the four constraints (including retries that arrive while the original request is still running), validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
 
 ## 6. Run the benchmarks
 
@@ -196,15 +196,15 @@ The body is `{"events": [...]}`, with 1–1,000 events. Each event has the brief
 
 - `event_id`: a UUID
 - `tenant_id`: like `t_0042`
-- `actor_id`: starts with `usr_`, `svc_` or `key_` to match `actor_type`
+- `actor_id`: starts with `usr_`, `svc_` or `key_` to match `actor_type`; at most 255 characters
 - `actor_type`: `user`, `service` or `api_key`
-- `actor_email`: must be `null` unless `actor_type` is `user`
+- `actor_email`: must be `null` unless `actor_type` is `user`; at most 320 characters
 - `action`: one of the brief's 22 actions
 - `resource_type`: one of the brief's 8 resource types
-- `resource_id`
+- `resource_id`: at most 255 characters
 - `result`: `success` or `failure`
 - `ip`: an IPv4 address
-- `metadata`: a JSON object
+- `metadata`: a JSON object, at most 16 KB
 - `occurred_at`: ISO 8601 with a timezone, stored as UTC; at most 1 hour ahead of the server's clock
 
 Unknown fields are rejected.
