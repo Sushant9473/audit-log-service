@@ -129,7 +129,7 @@ curl -s -H 'X-Tenant-ID: t_0001' 'localhost:8000/v1/summary'
 docker compose exec api pytest -q
 ```
 
-There are 32 tests covering the four constraints, validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
+There are 35 tests covering the four constraints (including retries that arrive while the original request is still running), validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
 
 ## 6. Run the benchmarks
 

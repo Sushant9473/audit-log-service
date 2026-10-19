@@ -69,6 +69,8 @@
     - Rejected: COPY into temp table for load (second code path; a temp table per ingest request = catalog churn at 3,000 ev/s)
 17. No deadlocks between concurrent batches: rows sorted by event_id before insert; rollup rows upserted ORDER BY tenant, day, action → locks always taken in the same order
     - Rejected: retrying on deadlock errors
+    - Evidence: test_concurrent_writes.py; with the event_id sort removed → DeadlockDetectedError in 3/3 runs; restored → pass
+    - Rollup ORDER BY = safeguard only: removed → no deadlock in 5 runs (aggregate happened to emit groups in the same order; SQL doesn't promise that) → kept
 18. Validation (app/models.py, Pydantic): unknown fields rejected (extra="forbid"); occurred_at must be an ISO 8601 string with timezone, stored as UTC; actor_id prefix must match actor_type (usr_/svc_/key_); actor_email null unless user; batch 1–1,000 events else 422 (not 413)
     - Rejected: silently ignoring unknown fields (audit log shouldn't drop data quietly)
 19. Ingest reply always 200 after commit, even if all duplicates; duplicates = received − inserted (repeats inside a batch included)
@@ -88,7 +90,7 @@
 28. List SQL built from optional conditions; only "$n" placeholders go into SQL text, values always bound parameters (no injection)
 29. Tests: separate database audit_test, dropped + recreated from migrations/001_schema.sql at start of every run; tables truncated before each test; app run in-process via httpx ASGITransport; command docker compose exec api pytest -q
     - Rejected: testing against the loaded data (would change counts and benchmark data); separate test image (time) → pytest, pytest-asyncio, httpx in requirements.txt
-30. Test coverage: duplicates (retried batch, repeat inside batch, counts not inflated); late + out of order across midnight (list order, day buckets); paging with 20 newer + 20 late events arriving mid-paging (no repeats, exactly the page-1 set, refresh shows all); ties on occurred_at; tenant isolation (list, filters, summary, stolen/edited cursor, bad header); 9 invalid-event cases + batch size 0 / 1001; offset timestamps stored as UTC; summary zero-fill, window edges, failures counted, anchor across tenants
+30. Test coverage: duplicates (retried batch, repeat inside batch, counts not inflated); concurrent retries (same batch from 10 callers at once → each event stored by exactly one request; 12 overlapping batches in random orders → no deadlock; 12 disjoint batches on the same 60 count rows → no lost increments); late + out of order across midnight (list order, day buckets); paging with 20 newer + 20 late events arriving mid-paging (no repeats, exactly the page-1 set, refresh shows all); ties on occurred_at; tenant isolation (list, filters, summary, stolen/edited cursor, bad header); 9 invalid-event cases + batch size 0 / 1001; offset timestamps stored as UTC; summary zero-fill, window edges, failures counted, anchor across tenants
 31. Benchmarks: scripts/bench.py, httpx client inside api container → http://localhost:8000, one keep-alive connection; 1 warm-up + 10 timed runs each; times include HTTP + JSON, not just SQL
 32. B2 reached by walking 2,000 pages with next_cursor once (keyset can't jump to an offset), then timing 10 requests of page 2,001 with that cursor
     - Rejected: adding an offset parameter just for B2 (offset = slow deep pages + unstable under inserts)
@@ -160,7 +162,7 @@
   - Benchmarks: B1 2.3 / B2 2.2 / B3 2.4 / B4 2.0 ms median
   - docker compose restart → healthy, rows kept
   - git history: no data/, *.ndjson*, .env ever committed; 30 tracked files
-- Tests: 29 passed in ~1.5 s
+- Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes)
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
 - Step 4 checks: 3 pages via next_cursor = SQL ORDER BY result, 0 overlap; cursor from other tenant / other filters / tampered / garbage → 400; summary 2026-09-15 for t_0001 = GROUP BY on events (7,728 events, 22 actions); 30 days returned

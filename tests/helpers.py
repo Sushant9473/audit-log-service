@@ -61,3 +61,14 @@ async def stored_rows():
 
 async def total_daily_counts():
     return await db.pool().fetchval("SELECT coalesce(sum(count), 0) FROM daily_action_counts")
+
+
+async def mismatched_daily_counts():
+    """How many (tenant, day, action) counts differ from a GROUP BY over the stored events. Should be 0."""
+    return await db.pool().fetchval("""
+        SELECT count(*)
+        FROM daily_action_counts d
+        FULL JOIN (SELECT tenant_id, (occurred_at AT TIME ZONE 'UTC')::date AS day, action, count(*) AS n
+                   FROM events GROUP BY 1, 2, 3) e USING (tenant_id, day, action)
+        WHERE d.count IS DISTINCT FROM e.n
+    """)
