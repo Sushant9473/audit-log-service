@@ -85,7 +85,7 @@ async def list_events(
         "to": to.isoformat() if to else None,
     }
 
-    async with db.pool().acquire() as conn:
+    async with db.tenant_connection(tenant_id) as conn:
         if cursor_param is None:
             # First page: fix the set of events this listing will ever show
             snapshot, after = await conn.fetchval(reads.SNAPSHOT_SQL), None
@@ -118,5 +118,5 @@ async def list_events(
 @app.get("/v1/summary")
 async def summary(tenant_id: str = Depends(tenant_from_header)):
     """Events per action per day for the last 30 days (ending on the newest day in the data)."""
-    async with db.pool().acquire() as conn:
+    async with db.tenant_connection(tenant_id) as conn:
         return await reads.daily_summary(conn, tenant_id)

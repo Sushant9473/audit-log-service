@@ -69,8 +69,10 @@ def event_to_json(row):
 
 async def daily_summary(conn, tenant_id, days=30):
     """Events per action per UTC day for the `days` days ending on the newest day in the data."""
-    # Newest day across all tenants (brief: "the newest event in your data"); uses the day index.
-    anchor = await conn.fetchval("SELECT max(day) FROM daily_action_counts")
+    # Newest day across all tenants (brief: "the newest event in your data"). Row-level security
+    # hides other tenants' rows here, so this goes through a function that may look at all of
+    # them but returns only the date (migrations/002). It uses the day index.
+    anchor = await conn.fetchval("SELECT newest_event_day()")
     if anchor is None:
         return {"from": None, "to": None, "days": []}
     start = anchor - timedelta(days=days - 1)

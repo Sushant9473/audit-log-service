@@ -67,6 +67,11 @@ The data lives in a Docker volume. It survives `docker compose down`; `docker co
 
 The read APIs take the tenant from the `X-Tenant-ID` header. We assume an auth gateway in front of this service has already authenticated the user and sets this header.
 
+Tenant isolation has two layers:
+
+1. Every read query filters on that tenant.
+2. PostgreSQL row-level security: each read request runs as a restricted database role that can only see rows for the tenant set on its transaction (`migrations/002_row_level_security.sql`).
+
 **Ingest a batch.** The sample uses tenant `t_9999` and September 2026 times, so it doesn't affect the benchmark tenant or move the summary window:
 
 ```bash
@@ -129,7 +134,7 @@ curl -s -H 'X-Tenant-ID: t_0001' 'localhost:8000/v1/summary'
 docker compose exec api pytest -q
 ```
 
-There are 39 tests covering the four constraints (including retries that arrive while the original request is still running), validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
+There are 44 tests covering the four constraints (including retries that arrive while the original request is still running, and row-level security on its own), validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
 
 ## 6. Run the benchmarks
 
@@ -157,12 +162,12 @@ Times are measured by an HTTP client inside the api container, so they include H
 
 | ID | Query | Median (ms) | Min (ms) | Max (ms) |
 |---|---|---|---|---|
-| B1 | List, no filters, first page | 2.3 | 2.2 | 2.4 |
-| B2 | List, no filters, events 100,001–100,050 | 2.2 | 2.2 | 6.1 |
-| B3 | List, `action=invoice.delete`, 1–30 Sept 2026, first page | 2.4 | 2.3 | 2.4 |
-| B4 | Summary, last 30 days | 2.1 | 2.0 | 2.3 |
+| B1 | List, no filters, first page | 3.0 | 2.7 | 3.5 |
+| B2 | List, no filters, events 100,001–100,050 | 3.1 | 2.7 | 17.5 |
+| B3 | List, `action=invoice.delete`, 1–30 Sept 2026, first page | 2.9 | 2.6 | 3.4 |
+| B4 | Summary, last 30 days | 2.4 | 2.4 | 2.9 |
 
-A second run gave the same medians within 0.1 ms.
+These numbers include row-level security. Before it was added, the medians were 2.3, 2.2, 2.4 and 2.1 ms. The roughly 0.5 ms difference is four extra statements per read request: `BEGIN`, switching to the restricted role, setting the tenant, and `COMMIT`.
 
 **How B2 is reached.** Pagination is keyset-based: each cursor points just after the last row of the previous page, so there's no "jump to offset". The benchmark walks 2,000 pages once with `next_cursor` (5.4 s, 2.7 ms per page) to get the cursor for page 2,001. It then times 10 requests for that page. The page's first and last events match rows 100,001 and 100,050 of a SQL `ORDER BY occurred_at DESC, event_id DESC`. The cursor seeks straight into the index, so page 2,001 costs the same as page 1.
 
@@ -256,6 +261,8 @@ The response is `{"data": [event, ...], "next_cursor": "..." | null}`. Events ar
 
 A cursor is signed, and it only works with the same tenant and the same filters it was created for.
 
+Both read endpoints run inside a transaction restricted to the caller's tenant by PostgreSQL row-level security. A query that forgot its tenant filter would still see only that tenant's rows.
+
 | Status | Meaning |
 |---|---|
 | 200 | One page |
@@ -291,7 +298,7 @@ app/models.py        Event schema and validation (shared by ingest and load)
 app/writes.py        The single write path: insert, skip duplicates, update daily counts
 app/reads.py         List and summary queries
 app/cursor.py        Signed pagination cursors
-migrations/          Database schema, built into the db image
+migrations/          Database schema (001) and row-level security (002), built into the db image
 scripts/load.py      Bulk loader
 scripts/bench.py     B1–B4 benchmarks
 scripts/explore_dataset.py  One-off dataset checks (standard library only)

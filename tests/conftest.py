@@ -16,7 +16,8 @@ from app.main import app
 
 MAIN_URL = os.environ["DATABASE_URL"]
 TEST_URL = MAIN_URL.rsplit("/", 1)[0] + "/audit_test"
-SCHEMA_SQL = (Path(__file__).parent.parent / "migrations" / "001_schema.sql").read_text()
+# Same files, same order as the postgres image applies them on a fresh volume
+MIGRATIONS = sorted((Path(__file__).parent.parent / "migrations").glob("*.sql"))
 os.environ.setdefault("CURSOR_SECRET", "test-cursor-secret")
 
 
@@ -30,7 +31,8 @@ async def _create_test_database():
         await admin.close()
     conn = await asyncpg.connect(TEST_URL)
     try:
-        await conn.execute(SCHEMA_SQL)
+        for migration in MIGRATIONS:
+            await conn.execute(migration.read_text())
     finally:
         await conn.close()
 

@@ -108,6 +108,14 @@
 37. Ingest throughput benchmark: scripts/ingest_bench.py; reserved tenants t_9001–t_9005, Sept 2026 dates (summary window unchanged), deleted before + after; bodies built before the clock; several client processes
     - Rejected: one client process (httpx in 1 process saturates at ~900 req/s → measured the client, not the API; found by per-process CPU sampling: client 98%, uvicorn 34%)
     - Rejected: benchmarking against an empty DB (less realistic; real run writes into the 2M-row table)
+38. Row-level security = 2nd layer for constraint 4 (migrations/002_row_level_security.sql)
+    - Role tenant_reader (NOLOGIN, SELECT only); policies FOR SELECT on events + daily_action_counts: tenant_id = current_setting('app.tenant_id', true); unset → NULL → no rows
+    - Reads: db.tenant_connection() = transaction + SET LOCAL ROLE tenant_reader + set_config('app.tenant_id', tenant, true); both end with the transaction (also on errors)
+    - Writes (ingest, load) stay as table owner: one batch may mix tenants
+    - Summary anchor via newest_event_day() SECURITY DEFINER: sees all tenants, returns only the date
+    - Role created in a DO block that ignores duplicate_object (roles are server-wide; audit_test reuses it)
+    - Limit: API logs in as superuser `audit` and only drops to tenant_reader per read → guards against a forgotten filter (bug), not against SQL injection (could RESET ROLE); production: separate non-superuser login roles for reader and writer
+    - Rejected: RLS on writes (ingest batches span tenants); separate reader connection pool (more config, same effect)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -183,7 +191,12 @@
 - fsync on the DB volume (pg_test_fsync): ~12,900 fdatasync/s (78 µs) → commit flushes not the limit
 - vs prod: peak 3,000/s → batched ingest has 7–12× headroom on 1 process; 1 event/request is below peak on 1 process
 - First (flawed) run with 1 client process: 866 / 26,916 / 37,225 events/s; client at 98% CPU → discarded
-- Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes); 39 passed in ~2.9 s after size caps
+- Row-level security checks: tests/test_row_level_security.py (query with no WHERE sees only scoped tenant; role without tenant sees 0 rows; reader can't DELETE; scope gone after a failed request on all 10 pool connections; summary anchor still global)
+- Mutation: List query's tenant filter removed → isolation tests still pass (RLS alone); RLS also bypassed → isolation test fails
+- Plans as tenant_reader: same indexes (events_tenant_time_idx, events_tenant_action_time_idx, daily_action_counts_pkey); policy becomes a One-Time Filter, not a per-row check
+- Benchmarks with RLS (warm, run 3): B1 3.0 / B2 3.1 / B3 2.9 / B4 2.4 ms median; before RLS 2.3 / 2.2 / 2.4 / 2.1 → ~0.5 ms = BEGIN + SET LOCAL ROLE + set_config + COMMIT round trips
+- Benchmarks right after db restart (cold, run 1): 2.6 / 2.6 / 3.6 / 2.8 ms; B2 walk 9.5 s (4.8 ms/page)
+- Tests: 29 passed in ~1.5 s (step 5); 35 passed in ~2.5 s after improvements 1–2 (future-date rule, concurrent writes); 39 passed in ~2.9 s after size caps; 44 passed in ~3.5 s after row-level security
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
 - Step 4 checks: 3 pages via next_cursor = SQL ORDER BY result, 0 overlap; cursor from other tenant / other filters / tampered / garbage → 400; summary 2026-09-15 for t_0001 = GROUP BY on events (7,728 events, 22 actions); 30 days returned
