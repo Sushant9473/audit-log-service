@@ -1,7 +1,9 @@
 FROM python:3.12-slim
 
+# PYTHONPATH lets scripts/*.py import the app package
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 

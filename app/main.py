@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app import db
+from app.models import IngestBatch
+from app.writes import insert_events
 
 
 @asynccontextmanager
@@ -23,3 +25,17 @@ async def health():
     except Exception as exc:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=503)
     return {"status": "ok"}
+
+
+@app.post("/v1/events")
+async def ingest(batch: IngestBatch):
+    """Store a batch of events. Invalid batches never get here: FastAPI returns 422 naming the bad event's index.
+
+    Safe to retry: events already stored are counted as duplicates, not errors.
+    The reply is sent only after the transaction commits.
+    """
+    async with db.pool().acquire() as conn:
+        async with conn.transaction():
+            inserted = await insert_events(conn, batch.events)
+    received = len(batch.events)
+    return {"received": received, "inserted": inserted, "duplicates": received - inserted}

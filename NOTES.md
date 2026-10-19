@@ -65,6 +65,16 @@
     - Rejected: publishing 5432 (clashes with a local Postgres on grader's machine)
 14. Postgres settings for ~4 GB Docker: shared_buffers 512MB, work_mem 32MB, maintenance_work_mem 512MB, max_wal_size 2GB, shm_size 256mb
 15. GET /health runs SELECT 1; 503 if DB unreachable
+16. One write function app/writes.py insert_events() for ingest + load; one SQL statement per batch: INSERT … SELECT FROM unnest(12 arrays) ON CONFLICT DO NOTHING RETURNING → rollup upsert → count
+    - Rejected: COPY into temp table for load (second code path; a temp table per ingest request = catalog churn at 3,000 ev/s)
+17. No deadlocks between concurrent batches: rows sorted by event_id before insert; rollup rows upserted ORDER BY tenant, day, action → locks always taken in the same order
+    - Rejected: retrying on deadlock errors
+18. Validation (app/models.py, Pydantic): unknown fields rejected (extra="forbid"); occurred_at must be an ISO 8601 string with timezone, stored as UTC; actor_id prefix must match actor_type (usr_/svc_/key_); actor_email null unless user; batch 1–1,000 events else 422 (not 413)
+    - Rejected: silently ignoring unknown fields (audit log shouldn't drop data quietly)
+19. Ingest reply always 200 after commit, even if all duplicates; duplicates = received − inserted (repeats inside a batch included)
+20. Load: each batch commits on its own (crash mid-load → just re-run); VACUUM (ANALYZE) after load so stats + visibility map are fresh (index-only scans)
+    - Rejected: waiting for autovacuum (benchmarks right after load would get stale plans)
+21. Dockerfile sets PYTHONPATH=/app so scripts/*.py can import app
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -85,3 +95,10 @@
 ## Measurements
 - Docker Desktop: Docker 29.8.2, Compose v5.6.0; 8 CPUs, 3.82 GiB memory limit (4,106,604,544 bytes)
 - Step 2 checks: fresh volume → schema created by initdb; /health ok; same event_id inserted twice → INSERT 0 1 then INSERT 0 0; service actor with email → rejected by events_email_only_for_users
+- Full load (fresh DB, batch 10,000): 89.2 s in script; 1 min 32 s wall clock incl. docker exec; 22,428 lines/s (25k/s at start → 22k/s at end as indexes grow)
+- Full load result: 2,001,032 lines; 1,980,386 inserted; 20,646 duplicates skipped; 0 invalid; VACUUM ANALYZE 1.8 s
+- Re-run of load: 0 inserted; 55.9 s; counts unchanged
+- Disk after load: events table 745 MB (781,041,664 B); events indexes 417 MB (436,805,632 B, PK + 2 list indexes); daily_action_counts 58 MB incl. indexes (60,489,728 B; 335,307 rows); whole DB 1,227 MB (1,286,175,767 B)
+- Per row: ~394 B table + ~221 B indexes ≈ 615 B/event
+- Rollup check: sum(daily_action_counts.count) = count(events) = 1,980,386; 0 buckets differ from GROUP BY over events
+- Demo ingest: 2 events, tenant t_9999, 2026-09-15 → events now 1,980,388; retry → inserted 0, duplicates 2; bad IP at index 1 → 422 loc ["body","events",1,"ip"], nothing stored
