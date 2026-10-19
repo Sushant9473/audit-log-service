@@ -129,7 +129,7 @@ curl -s -H 'X-Tenant-ID: t_0001' 'localhost:8000/v1/summary'
 docker compose exec api pytest -q
 ```
 
-There are 29 tests covering the four constraints, validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
+There are 32 tests covering the four constraints, validation and the summary. They create their own `audit_test` database, so the loaded data is never touched.
 
 ## 6. Run the benchmarks
 
@@ -205,7 +205,7 @@ The body is `{"events": [...]}`, with 1–1,000 events. Each event has the brief
 - `result`: `success` or `failure`
 - `ip`: an IPv4 address
 - `metadata`: a JSON object
-- `occurred_at`: ISO 8601 with a timezone, stored as UTC
+- `occurred_at`: ISO 8601 with a timezone, stored as UTC; at most 1 hour ahead of the server's clock
 
 Unknown fields are rejected.
 

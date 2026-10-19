@@ -45,7 +45,7 @@
 5. One shared write statement for ingest + load: INSERT … ON CONFLICT (event_id) DO NOTHING RETURNING → add only returned rows to daily_action_counts (ON CONFLICT DO UPDATE count = count + excluded.count)
    - Effect: retries never double-count; late events land on their own day
    - Rejected: rebuilding counts with a periodic job (stale summary; second code path)
-6. Ingest: POST /v1/events, body {"events": [...]}, 1–1,000 events; any invalid event → whole batch 422 with failing index; one transaction; reply {"received", "inserted", "duplicates"} only after commit; late, out-of-order, future-dated events accepted
+6. Ingest: POST /v1/events, body {"events": [...]}, 1–1,000 events; any invalid event → whole batch 422 with failing index; one transaction; reply {"received", "inserted", "duplicates"} only after commit; late and out-of-order events accepted; occurred_at > 1 h in the future rejected (decision 35)
    - Rejected: partial success (more complex response); async queue before DB (time; harder "stored" guarantee)
    - Changed from step 0 suggestion (per-event reject) → all-or-nothing, for time
 7. Read-API tenant: required X-Tenant-ID header, assumed set by an auth gateway that already authenticated the user; every read query has WHERE tenant_id = $1
@@ -95,6 +95,10 @@
 33. Start command docker compose up -d --build --wait; api healthcheck = python urllib GET /health (slim image has no curl) → command returns only when both containers answer
     - Rejected: telling the grader to wait or retry curl
 34. README sample ingest = tenant t_9999, 2026-09-15 times (doesn't touch t_0001, doesn't move summary window); next-page example extracts next_cursor with sed (no jq/python needed on host)
+35. Ingest + load reject occurred_at more than 1 h ahead of server time (MAX_FUTURE_SKEW in app/models.py)
+    - Why: Summary window ends on newest day across all tenants → one event dated 2099 would blank every tenant's dashboard
+    - Rejected: clamping the summary anchor to today (bad data still stored; anchor rule no longer "newest event in the data")
+    - Rejected: tighter allowance like 5 min (callers with drifting clocks would lose events)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -102,8 +106,8 @@
 - Ingest callers = trusted internal services; one batch may mix tenants
 - actor_email must be null unless actor_type = user; null allowed for user (brief type: string or null)
 - Timestamps with non-Z offset accepted and converted to UTC
-- Events > 10 min late (e.g. retries, up to 19 min in data) and future-dated events accepted
-- Summary anchor moves as new events arrive; a future-dated event moves it too
+- Events > 10 min late (e.g. retries, up to 19 min in data) accepted; up to 1 h in the future accepted (clock skew)
+- Summary anchor moves as new events arrive; at most 1 h ahead of server time (decision 35)
 - B3 "1–30 Sept 2026" = from 2026-09-01T00:00:00Z (incl.) to 2026-10-01T00:00:00Z (excl.)
 - B2 = page 2,001 (events 100,001–100,050); timed = only that page's request; the 2,000-page walk reported separately
 - Benchmarks warm (1 warm-up request); client inside api container → localhost:8000

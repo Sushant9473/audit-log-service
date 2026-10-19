@@ -1,6 +1,6 @@
 """The event schema from the brief, as a Pydantic model shared by the Ingest API and the load script."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ipaddress import IPv4Address
 from typing import Any, Literal, Optional
 from uuid import UUID
@@ -20,6 +20,11 @@ ResourceType = Literal["user", "api_key", "invoice", "payment", "project", "docu
 Result = Literal["success", "failure"]
 
 ACTOR_ID_PREFIX = {"user": "usr_", "service": "svc_", "api_key": "key_"}
+
+# Allowance for callers whose clocks run ahead. Anything further in the future is a caller bug,
+# and would drag the Summary window (which ends on the newest day in the data) into the future
+# for every tenant.
+MAX_FUTURE_SKEW = timedelta(hours=1)
 
 
 class Event(BaseModel):
@@ -52,7 +57,10 @@ class Event(BaseModel):
     def occurred_at_to_utc(cls, value: datetime):
         if value.tzinfo is None:
             raise ValueError("occurred_at needs a timezone, e.g. a trailing Z")
-        return value.astimezone(timezone.utc)
+        value = value.astimezone(timezone.utc)
+        if value > datetime.now(timezone.utc) + MAX_FUTURE_SKEW:
+            raise ValueError("occurred_at is more than 1 hour in the future")
+        return value
 
     @model_validator(mode="after")
     def actor_fields_match_type(self):
