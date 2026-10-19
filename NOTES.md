@@ -89,6 +89,9 @@
 29. Tests: separate database audit_test, dropped + recreated from migrations/001_schema.sql at start of every run; tables truncated before each test; app run in-process via httpx ASGITransport; command docker compose exec api pytest -q
     - Rejected: testing against the loaded data (would change counts and benchmark data); separate test image (time) → pytest, pytest-asyncio, httpx in requirements.txt
 30. Test coverage: duplicates (retried batch, repeat inside batch, counts not inflated); late + out of order across midnight (list order, day buckets); paging with 20 newer + 20 late events arriving mid-paging (no repeats, exactly the page-1 set, refresh shows all); ties on occurred_at; tenant isolation (list, filters, summary, stolen/edited cursor, bad header); 9 invalid-event cases + batch size 0 / 1001; offset timestamps stored as UTC; summary zero-fill, window edges, failures counted, anchor across tenants
+31. Benchmarks: scripts/bench.py, httpx client inside api container → http://localhost:8000, one keep-alive connection; 1 warm-up + 10 timed runs each; times include HTTP + JSON, not just SQL
+32. B2 reached by walking 2,000 pages with next_cursor once (keyset can't jump to an offset), then timing 10 requests of page 2,001 with that cursor
+    - Rejected: adding an offset parameter just for B2 (offset = slow deep pages + unstable under inserts)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -125,6 +128,21 @@
   - ingest_seq <= snapshot = Filter on fetched rows (not in index); no Seq Scan anywhere
   - Generic prepared-statement plans (asyncpg) use the same indexes
 - Ad-hoc HTTP timings from host (not the benchmark): page 1 43 ms (first call), pages 2–3 6–11 ms, filtered 8.8 ms, summary 5.8 ms
+- Benchmarks, run 1 (2026-10-19, warm, after load + VACUUM ANALYZE), page size 50, t_0001:
+
+  | ID | Query | Median (ms) | Min (ms) | Max (ms) |
+  |---|---|---|---|---|
+  | B1 | List, no filters, first page | 2.3 | 2.2 | 2.4 |
+  | B2 | List, no filters, events 100,001–100,050 (page 2,001) | 2.2 | 2.2 | 6.1 |
+  | B3 | List, action=invoice.delete, 1–30 Sept 2026, first page | 2.4 | 2.3 | 2.4 |
+  | B4 | Summary, last 30 days | 2.1 | 2.0 | 2.3 |
+
+- Benchmarks, run 2 (same conditions): B1 2.3 / B2 2.2 / B3 2.3 / B4 2.0 ms median → stable within 0.1 ms
+- B2 walk: 2,000 pages (100,000 events) in 5.4 s ≈ 2.7 ms per page
+- B2 check: page 2,001 first event bbb9e108-… (2026-09-15T18:54:17.459Z) = SQL row_number 100,001; last 7fe5830c-… (18:35:13.685Z) = row_number 100,050
+- Host: Apple M1, 8 cores (8 physical), 8 GiB RAM, macOS 27.0.1
+- Docker Desktop 29.8.2, aarch64: 8 CPUs, memory limit 3.82 GiB (4,106,604,544 bytes)
+- Container memory after benchmarks: db 739 MiB, api 46 MiB
 - Tests: 29 passed in ~1.5 s
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
