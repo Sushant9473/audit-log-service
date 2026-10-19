@@ -56,10 +56,15 @@
    - Rejected: offset pagination (dupes/misses under inserts; deep pages slow)
 10. Summary: GET /v1/summary; anchor = newest day in daily_action_counts (all tenants); window = 30 UTC days ending on anchor day, inclusive; every day present, zeros included; success + failure counted
     - Rejected: rolling 720 h window (daily buckets can't split a day); per-tenant anchor (brief says "newest event in your data")
-11. Load: scripts/load.py inside api container (docker compose exec); stream gzip; batches of 10,000 → COPY into temp table → shared write statement; bad lines skipped + counted; re-runnable
+11. Load: scripts/load.py inside api container; dataset piped on stdin: docker compose exec -T api python scripts/load.py < data/audit_events.ndjson.gz; stream gzip; batches of 10,000 → COPY into temp table → shared write statement; bad lines skipped + counted; re-runnable
     - Rejected: posting batches to the Ingest API (HTTP + JSON overhead; brief allows direct bulk load)
-12. Schema setup: migrations/ mounted into /docker-entrypoint-initdb.d (runs on fresh volume); schema change → docker compose down -v
-    - Rejected: migration tool like Alembic (time)
+    - Rejected: bind-mounting ./data (Docker Desktop on macOS was blocked from ~/Desktop: "mkdir /host_mnt/Users/sushant/Desktop: operation not permitted"; same risk on grader's machine)
+12. Schema setup: migrations/ copied into a db image (db.Dockerfile, FROM postgres:16) at /docker-entrypoint-initdb.d; runs once on a fresh volume; schema change → docker compose down -v
+    - Rejected: bind-mounting migrations/ (same macOS block); migration tool like Alembic (time)
+13. Compose: no folder mounts at all; db port not published to host (psql via docker compose exec db psql -U audit); api on :8000; db healthcheck pg_isready over TCP so api starts only after schema init
+    - Rejected: publishing 5432 (clashes with a local Postgres on grader's machine)
+14. Postgres settings for ~4 GB Docker: shared_buffers 512MB, work_mem 32MB, maintenance_work_mem 512MB, max_wal_size 2GB, shm_size 256mb
+15. GET /health runs SELECT 1; 503 if DB unreachable
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -78,4 +83,5 @@
 - Demo/README ingest uses tenant t_9999 + Sept 2026 timestamps so it doesn't move the summary window
 
 ## Measurements
-- (none yet)
+- Docker Desktop: Docker 29.8.2, Compose v5.6.0; 8 CPUs, 3.82 GiB memory limit (4,106,604,544 bytes)
+- Step 2 checks: fresh volume → schema created by initdb; /health ok; same event_id inserted twice → INSERT 0 1 then INSERT 0 0; service actor with email → rejected by events_email_only_for_users

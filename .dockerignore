@@ -1,0 +1,9 @@
+# Keep the image small: the dataset is mounted at runtime, never copied in
+data/
+.git/
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+.DS_Store
+audit-log-prompts.md

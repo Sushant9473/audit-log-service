@@ -1,0 +1,49 @@
+services:
+  db:
+    # postgres:16 with migrations/ baked in (see db.Dockerfile)
+    build:
+      context: .
+      dockerfile: db.Dockerfile
+    environment:
+      POSTGRES_USER: audit
+      POSTGRES_PASSWORD: audit
+      POSTGRES_DB: audit
+    # Sized for a laptop with ~4 GB given to Docker:
+    #   shared_buffers       = Postgres's own page cache (indexes for t_0001 stay in memory)
+    #   work_mem             = memory per sort/hash before spilling to disk
+    #   maintenance_work_mem = memory for index builds and ANALYZE after the bulk load
+    #   max_wal_size         = fewer forced checkpoints while loading 2M rows
+    command: >
+      postgres
+      -c shared_buffers=512MB
+      -c work_mem=32MB
+      -c maintenance_work_mem=512MB
+      -c max_wal_size=2GB
+    # Docker's default 64 MB /dev/shm is too small for Postgres's parallel queries
+    shm_size: 256mb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Checks over TCP: during first-time init Postgres only listens on a local socket,
+      # so this stays unhealthy until the schema is created and the real server is up
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U audit -d audit"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://audit:audit@db:5432/audit
+      # Signs pagination cursors. Override in .env for anything beyond local use.
+      CURSOR_SECRET: ${CURSOR_SECRET:-local-dev-cursor-secret}
+    ports:
+      - "8000:8000"
+    # No folder mounts: the load script reads the dataset from stdin, piped in by
+    # `docker compose exec -T`, so it works wherever the repo is cloned.
+
+volumes:
+  pgdata:
