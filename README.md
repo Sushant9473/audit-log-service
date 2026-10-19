@@ -32,10 +32,10 @@ sha256sum data/audit_events.ndjson.gz       # Linux
 ## 2. Start the service
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --wait
 ```
 
-This builds and starts two containers:
+`--wait` returns once both containers are healthy, which takes about 10 seconds. This builds and starts two containers:
 
 - `db`: PostgreSQL 16. The schema in `migrations/` is built into the image and applied on first start.
 - `api`: FastAPI on port 8000. It starts once the database is healthy.

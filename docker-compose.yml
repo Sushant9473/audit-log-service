@@ -42,6 +42,12 @@ services:
       CURSOR_SECRET: ${CURSOR_SECRET:-local-dev-cursor-secret}
     ports:
       - "8000:8000"
+    healthcheck:
+      # Lets `docker compose up --wait` return only once the API answers (the image has no curl)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
     # No folder mounts: the load script reads the dataset from stdin, piped in by
     # `docker compose exec -T`, so it works wherever the repo is cloned.
 
