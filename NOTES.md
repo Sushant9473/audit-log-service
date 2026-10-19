@@ -92,6 +92,9 @@
 31. Benchmarks: scripts/bench.py, httpx client inside api container → http://localhost:8000, one keep-alive connection; 1 warm-up + 10 timed runs each; times include HTTP + JSON, not just SQL
 32. B2 reached by walking 2,000 pages with next_cursor once (keyset can't jump to an offset), then timing 10 requests of page 2,001 with that cursor
     - Rejected: adding an offset parameter just for B2 (offset = slow deep pages + unstable under inserts)
+33. Start command docker compose up -d --build --wait; api healthcheck = python urllib GET /health (slim image has no curl) → command returns only when both containers answer
+    - Rejected: telling the grader to wait or retry curl
+34. README sample ingest = tenant t_9999, 2026-09-15 times (doesn't touch t_0001, doesn't move summary window); next-page example extracts next_cursor with sed (no jq/python needed on host)
 
 ## Assumptions
 - event_id unique globally, not per tenant
@@ -143,6 +146,16 @@
 - Host: Apple M1, 8 cores (8 physical), 8 GiB RAM, macOS 27.0.1
 - Docker Desktop 29.8.2, aarch64: 8 CPUs, memory limit 3.82 GiB (4,106,604,544 bytes)
 - Container memory after benchmarks: db 739 MiB, api 46 MiB
+- Fresh-clone run (2026-10-19): git clone to temp folder "grader-check" (own compose project + volume), dataset copied in, every README command run as written
+  - Found: curl /health right after docker compose up -d → connection reset (exit 56), uvicorn not ready → fixed with healthcheck + --wait (commit 501eb67), re-run from empty volume
+  - docker compose build --no-cache OK (pinned pip versions install from scratch)
+  - up -d --build --wait: healthy in 6.8 s; /health ok immediately
+  - Load: 96.7 s in script, 1 min 39 s wall clock; 1,980,386 inserted / 20,646 duplicates / 0 invalid (same as first load)
+  - Ingest sample: inserted 2, then duplicates 2; 4 list variants, cursor page 2, summary all OK
+  - Tests (docker compose exec api pytest -q, no -T): 29 passed
+  - Benchmarks: B1 2.3 / B2 2.2 / B3 2.4 / B4 2.0 ms median
+  - docker compose restart → healthy, rows kept
+  - git history: no data/, *.ndjson*, .env ever committed; 30 tracked files
 - Tests: 29 passed in ~1.5 s
 - Mutation checks: snapshot filter removed → pagination test fails ("listing must be exactly what existed at page 1"); cursor tenant check removed → isolation test fails; code restored → 29 pass
 - Main DB after test runs: 1,980,388 rows (untouched)
